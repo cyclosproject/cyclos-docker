@@ -1,0 +1,104 @@
+version: '3.9'
+services:
+  # One-shot initializer: ensure acme.json file exists and is secured on the host
+  create-acme:
+    image: alpine:3.18
+    command: sh -c "mkdir -p /acme && [ -f /acme/acme.json ] || touch /acme/acme.json && chmod 600 /acme/acme.json"
+    volumes:
+      - ./traefik:/acme
+    restart: 'no'
+    networks:
+      - cyclos-net
+
+  # Use Traefik as a reverse proxy to route traffic to the Cyclos application
+  traefik:
+    image: traefik:v2.10
+    command:
+      - --api.dashboard=false
+      - --providers.docker=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      - --entrypoints.web.http.redirections.entryPoint.permanent=true
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --certificatesresolvers.le.acme.email=${LETS_ENCRYPT_EMAIL:-you@example.com}
+      - --certificatesresolvers.le.acme.storage=/acme.json
+    depends_on:
+      - create-acme
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/acme.json:/acme.json
+    restart: unless-stopped
+    networks:
+      - cyclos-net
+
+  # Cyclos application container
+  cyclos:
+    image: cyclos/cyclos:${CYCLOS_VERSION:-latest}
+    environment:
+      DB_HOST: db
+      DB_NAME: cyclos
+      DB_USER: cyclos
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      JAVA_OPTS: >-
+        -Xmx${MAX_JVM_MEMORY:-4096m}
+        -Dcyclos.header.remoteAddress=X-Forwarded-For
+        -Dcyclos.header.protocol=X-Forwarded-Proto
+        -Dcyclos.header.remoteAddress.index=-1
+    volumes:
+      - ./cyclos/logs:/var/log/cyclos
+      - ./cyclos/tomcat-logs:/usr/local/tomcat/logs
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cyclos.rule=Host(`${DOMAIN:-example.com}`)"
+      - "traefik.http.routers.cyclos.entrypoints=websecure"
+      - "traefik.http.routers.cyclos.tls.certresolver=le"
+    restart: unless-stopped
+    networks:
+      - cyclos-net
+    secrets:
+      - db_password
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # The PostgreSQL database
+  db:
+    image: postgis/postgis:18-3.6-alpine
+    environment:
+      POSTGRES_DB: cyclos
+      POSTGRES_USER: cyclos
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./db/data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: 
+        - "CMD-SHELL"
+        - |
+          pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1;
+          if [ -n "$(ls -A /docker-entrypoint-initdb.d/ 2>/dev/null)" ]; then
+            psql -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'application';" | grep -q 1 || exit 1;
+          fi
+      interval: 5s
+      timeout: 5s
+      retries: 100
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - cyclos-net
+    secrets:
+      - db_password
+
+networks:
+  cyclos-net:
+    driver: bridge
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
