@@ -1,0 +1,14 @@
+http:
+  routers:
+    cyclos-router:
+      rule: "Host(`{{ env \"DOMAIN\" }}`)"
+      entryPoints:
+        - websecure
+      service: cyclos-svc
+      tls:
+        certResolver: le
+  services:
+    cyclos-svc:
+      loadBalancer:
+        servers:
+          - url: "http://cyclos:8080"

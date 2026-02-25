@@ -1,21 +1,46 @@
-version: '3.9'
 services:
-  # One-shot initializer: ensure acme.json file exists and is secured on the host
-  create-acme:
-    image: alpine:3.18
-    command: sh -c "mkdir -p /acme && [ -f /acme/acme.json ] || touch /acme/acme.json && chmod 600 /acme/acme.json"
+  # One-shot initializer: Fixes all permission issues for hardened images
+  init:
+    image: dhi.io/bash:5
+    user: "0"
+    environment:
+      DOMAIN: ${DOMAIN:-example.com}
     volumes:
-      - ./traefik:/acme
+      - ./traefik:/traefik-data
+      - ./cyclos/runtime-secrets:/cyclos-runtime
+      - ./cyclos/logs:/cyclos-logs
+      - ./cyclos/tomcat-logs:/tomcat-logs
+      - ./secrets/db_password.txt:/source_secret:ro
+    command: >
+      bash -c "
+        # 1. Setup Traefik acme.json
+        touch /traefik-data/acme.json && 
+        chmod 600 /traefik-data/acme.json && 
+        chown 65532:65532 /traefik-data/acme.json &&
+
+        # 2. Fix Traefik Config Permissions
+        if [ -f /traefik-data/configuration.yml ]; then
+          chown 65532:65532 /traefik-data/configuration.yml;
+        fi &&
+
+        # 3. Fix Cyclos Log Permissions
+        mkdir -p /cyclos-logs /tomcat-logs &&
+        chown -R 65532:65532 /cyclos-logs /tomcat-logs &&
+
+        # 4. Setup Cyclos Secret
+        mkdir -p /cyclos-runtime &&
+        cp /source_secret /cyclos-runtime/db_password &&
+        chown 65532:65532 /cyclos-runtime/db_password &&
+        chmod 400 /cyclos-runtime/db_password
+      "
     restart: 'no'
-    networks:
-      - cyclos-net
 
   # Use Traefik as a reverse proxy to route traffic to the Cyclos application
   traefik:
-    image: traefik:v2.10
+    image: dhi.io/traefik:3
     command:
       - --api.dashboard=false
-      - --providers.docker=true
+      - --providers.file.filename=/etc/traefik/configuration.yml
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --entrypoints.web.http.redirections.entryPoint.to=websecure
@@ -23,15 +48,18 @@ services:
       - --entrypoints.web.http.redirections.entryPoint.permanent=true
       - --certificatesresolvers.le.acme.tlschallenge=true
       - --certificatesresolvers.le.acme.email=${LETS_ENCRYPT_EMAIL:-you@example.com}
-      - --certificatesresolvers.le.acme.storage=/acme.json
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
     depends_on:
-      - create-acme
+      init:
+        condition: service_completed_successfully
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-example.com}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/acme.json:/acme.json
+      - ./traefik/acme.json:/acme/acme.json
+      - ./traefik/configuration.yml:/etc/traefik/configuration.yml:ro
     restart: unless-stopped
     networks:
       - cyclos-net
@@ -43,7 +71,7 @@ services:
       DB_HOST: db
       DB_NAME: cyclos
       DB_USER: cyclos
-      DB_PASSWORD_FILE: /run/secrets/db_password
+      DB_PASSWORD_FILE: /run/runtime-secrets/db_password
       JAVA_OPTS: >-
         -Xmx${MAX_JVM_MEMORY:-4096m}
         -Dcyclos.header.remoteAddress=X-Forwarded-For
@@ -52,17 +80,13 @@ services:
     volumes:
       - ./cyclos/logs:/var/log/cyclos
       - ./cyclos/tomcat-logs:/usr/local/tomcat/logs
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.cyclos.rule=Host(`${DOMAIN:-example.com}`)"
-      - "traefik.http.routers.cyclos.entrypoints=websecure"
-      - "traefik.http.routers.cyclos.tls.certresolver=le"
+      - ./cyclos/runtime-secrets:/run/runtime-secrets:ro
     restart: unless-stopped
     networks:
       - cyclos-net
-    secrets:
-      - db_password
     depends_on:
+      init:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
 
