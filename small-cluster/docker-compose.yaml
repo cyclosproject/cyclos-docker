@@ -1,0 +1,39 @@
+services:
+  cyclos:
+    image: cyclos/cyclos:${CYCLOS_VERSION}
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_NAME: ${DB_NAME:-cyclos}
+      DB_USER: ${DB_USER:-cyclos}
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      CLUSTER_DNS: cyclos # Same as service name for internal DNS resolution
+      JAVA_OPTS: >-
+        -Xmx${MAX_JVM_MEMORY:-4096m}
+        -Dcyclos.header.remoteAddress=X-Forwarded-For
+        -Dcyclos.header.protocol=X-Forwarded-Proto
+        -Dcyclos.header.remoteAddress.index=-1
+        -Dcyclos.log=console
+    deploy:
+      mode: replicated
+      replicas: ${REPLICAS:-1}
+      endpoint_mode: dnsrr # Required for CLUSTER_DNS to work
+      placement:
+        max_replicas_per_node: 1
+    ports:
+      - target: 8080
+        published: 8080
+        protocol: tcp
+        mode: host # External LoadBalancer needs to distribute traffic to all nodes
+    networks:
+      cyclos-net:
+    secrets:
+      - db_password
+
+networks:
+  cyclos-net:
+    driver: overlay
+
+secrets:
+  # Assumes the secret `db_password` is created in the Swarm (external)
+  db_password:
+    external: true

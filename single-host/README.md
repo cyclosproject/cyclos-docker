@@ -3,12 +3,13 @@ Small Docker deployment for Cyclos
 
 This is a minimal, production-ready single-host Docker Compose project for small Cyclos installations. It deploys all services to a single host, which is suitable for a quick start into production, but lacks fault tolerance (if the host is down, the service will be offline). Services deployed:
 
-* Traefik as a load balancer, handling TLS (automatically requests and renews a Let's Encrypt certificate) and HTTP/2.
+* Traefik as a reverse proxy, handling TLS (automatically requests and renews a Let's Encrypt certificate) and HTTP/2.
 * Cyclos.
 * A PostgreSQL with PostGIS database.
 
 **Prerequisites**
-- Docker version 20.10.0 with the Compose plugin installed. See https://docs.docker.com/compose/install/.
+- Minimum Docker Engine version is 20.10.0, however the latest LTS version is recommended.
+- Docker Compose plugin. See https://docs.docker.com/compose/install/.
 - Docker Hardened Images are used. They are free for everyone to use, but require a logging in before pulling images. You need to create a user in https://hub.docker.com/.
 - A public DNS A/AAAA record pointing your domain to this host. A Let's Encrypt certificate will be requested and automatically renewed. You just need to fill in your domain name and administration email (see below).
 - An optional backup (dump) of your Cyclos database. Most systems will use a local Cyclos installation to initialize the license and do the initial setup. See the step below for requirements for this file to work.
@@ -34,9 +35,9 @@ chmod 600 secrets/db_password.txt
 # Edit the secrets/db_password.txt file, for example: nano secrets/db_password.txt
 ```
 
-4. If you have initial SQL dump(s) for a pre-configured installation, place your `*.sql` file into `./db/init/` before starting (optional). The database will be imported on the first time the service starts. **IMPORTANT!** Either the owner of all db objects MUST be `cyclos` OR the dump MUST have been created with the `psql --no-owner --no-acl` flags, otherwise, there will be errors that the user isn't found and the database won't work. If the file isn't found, Cyclos will start with a blank database, which will require the creation of a new Cyclos license.
+4. If you have initial SQL dump(s) for a pre-configured installation, place your `*.sql` file into `./db/init/` before starting (optional). The database will be imported on the first time the service starts. **IMPORTANT!** Either the owner of all db objects MUST be `cyclos` OR the dump MUST have been created with the `pg_dump --no-owner --no-acl` flags, otherwise, there will be errors that the user isn't found and the database won't work. If the file isn't found, Cyclos will start with a blank database, which will require the creation of a new Cyclos license.
 
-5. Login to dhi.io: In order to pull Docker Hardened Images, you must be authenticated. Note that the authentication expires after some minutes, so you may need this periodically if new images are pulled:
+5. Login to dhi.io: In order to pull Docker Hardened Images (used for Traefik), you must be authenticated. Note that the authentication expires after some minutes, so you may need this periodically if new images are pulled:
 
 ```bash
 docker login dhi.io
