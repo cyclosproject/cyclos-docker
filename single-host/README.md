@@ -90,7 +90,7 @@ You can change the filename (the portion after `>`). In this example, it will cr
 **Upgrading Cyclos**
 - To upgrade between major versions, always carefully inspect the release notes in https://license.cyclos.org
 - Also, before upgrading, it is always recommended to backup your database (as described above)
-- Edit your `.env` file and set the `CYCLOS_VERSION` variable. Note that updated versions are pushed in Docker under the generic tag. For example: tag `4.17` is updated on versions `4.17.1`, `4.17.2`, etc. Also, major versions like `5` are also updated for `5.0.1`, `5.0.2`, etc, as well as `5.1.0`, `5.1.1`, etc.
+- Edit your `.env` file and set the `CYCLOS_VERSION` variable. Note that updated versions are pushed in Docker under the generic tag. Major versions like `5` are also updated for `5.0.1`, `5.0.2`, etc, as well as `5.1.0`, `5.1.1`, etc.
 - Either case (updating to a new minor version under the same symbolic tag or to a major version), run the following:
 ```bash
 # fetch new image

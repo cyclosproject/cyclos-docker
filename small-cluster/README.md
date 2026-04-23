@@ -1,7 +1,7 @@
 Small cluster example
 =====================
 
-This folder contains a minimal Docker Swarm example to run Cyclos (4.17+) in a production cluster.
+This folder contains a minimal Docker Swarm example to run Cyclos (5+) in a production cluster.
 This works for a small cluster (2-5) nodes. For larger clusters, Kubernetes is better suited instead.
 It is assumed that the load balancer and database will be provided externally.
 
@@ -175,8 +175,7 @@ Also, before upgrading, it is always recommended to backup your database.
 
 To upgrade, SSH into your Leader node, go to the `small-cluster` directory and edit your `.env` file with the
 new `CYCLOS_VERSION`. Note that minor and patch versions are published in the same tag, so, if you are set it to
-`4.17`, all `4.17.0`, `4.17.1`, `4.17.2`... versions will be published to that tag, so you don't need to change it.
-Future major versions like `5` will also updated for `5.0.1`, `5.0.2`, etc, as well as `5.1.0`, `5.1.1`, etc.
+`5`, it will also updated for `5.0.1`, `5.0.2`, etc, as well as `5.1.0`, `5.1.1`, etc.
 
 Then, run the following in the Leader node, in the `small-cluster` directory:
 
