@@ -1,14 +1,23 @@
 http:
   routers:
     cyclos-router:
-      rule: "Host(`{{ env \"DOMAIN\" }}`)"
+      rule: 'Host(`{{ env "DOMAIN" }}`)'
       entryPoints:
         - websecure
       service: cyclos-svc
       tls:
         certResolver: le
+
   services:
     cyclos-svc:
       loadBalancer:
+        serversTransport: cyclos-transport
         servers:
           - url: "http://cyclos:8080"
+
+  serversTransports:
+    cyclos-transport:
+      forwardingTimeouts:
+        dialTimeout: 30s
+        responseHeaderTimeout: 600s
+        idleConnTimeout: 600s
