@@ -33,12 +33,14 @@ cp .env.example .env
 3. Create a file containing the database password:
 
 ```bash
+mkdir secrets
 touch secrets/db_password.txt
 chmod 600 secrets/db_password.txt
-# Edit the secrets/db_password.txt file, for example: nano secrets/db_password.txt
+# Set some password for the database to be created
+nano secrets/db_password.txt
 ```
 
-4. If you have initial SQL dump(s) for a pre-configured installation, place your `*.sql` file into `./db/init/` before starting (optional). The database will be imported on the first time the service starts. **IMPORTANT!** Either the owner of all db objects MUST be `cyclos` OR the dump MUST have been created with the `pg_dump --no-owner --no-acl` flags, otherwise, there will be errors that the user isn't found and the database won't work. If the file isn't found, Cyclos will start with a blank database, which will require the creation of a new Cyclos license.
+4. If you have initial SQL dump(s) for a pre-configured installation, place your `*.sql` file into `./db/init/` before starting (create that directory first). The database will be imported on the first time the service starts. **IMPORTANT!** Either the owner of all db objects MUST be `cyclos` OR the dump MUST have been created with the `pg_dump --no-owner --no-acl` flags, otherwise, there will be errors that the user isn't found and the database won't work. If the file isn't found, Cyclos will start with a blank database, which will require the creation of a new Cyclos license.
 
 5. Login to dhi.io: In order to pull Docker Hardened Images (used for Traefik and the Bash initializer), you must be authenticated. Note that the authentication expires after some minutes, so you may need this periodically if new images are pulled:
 
