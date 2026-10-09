@@ -1,10 +1,10 @@
+name: cyclos
+
 services:
   # One-shot initializer: Fixes all permission issues for hardened images
   init:
     image: dhi.io/bash:5
     user: "0"
-    environment:
-      DOMAIN: ${DOMAIN:-example.com}
     volumes:
       - ./traefik:/traefik-data
       - ./cyclos/runtime-secrets:/cyclos-runtime
@@ -13,21 +13,25 @@ services:
       - ./secrets/db_password.txt:/source_secret:ro
     command: >
       bash -c "
-        # 1. Setup Traefik acme.json
-        touch /traefik-data/acme.json && 
-        chmod 600 /traefik-data/acme.json && 
+        # 1. Setup Traefik acme.json. If the host file did not exist at
+        # startup, Docker creates a directory with that name for the file
+        # bind-mount; remove it so traefik can mount it as a file later.
+        if [ -d /traefik-data/acme.json ]; then
+          rm -rf /traefik-data/acme.json;
+        fi &&
+        touch /traefik-data/acme.json &&
+        chmod 600 /traefik-data/acme.json &&
         chown 65532:65532 /traefik-data/acme.json &&
 
-        # 2. Fix Traefik Config Permissions
-        if [ -f /traefik-data/configuration.yml ]; then
-          chown 65532:65532 /traefik-data/configuration.yml;
-        fi &&
-
-        # 3. Fix Cyclos Log Permissions
+        # 2. Fix Cyclos Log Permissions
         mkdir -p /cyclos-logs /tomcat-logs &&
         chown -R 65532:65532 /cyclos-logs /tomcat-logs &&
 
-        # 4. Setup Cyclos Secret
+        # 3. Setup Cyclos Secret
+        if [ ! -f /source_secret ]; then
+          echo 'ERROR: secrets/db_password.txt does not exist. Create it before starting (see README step 3).' >&2;
+          exit 1;
+        fi &&
         mkdir -p /cyclos-runtime &&
         cp /source_secret /cyclos-runtime/db_password &&
         chown 65532:65532 /cyclos-runtime/db_password &&
@@ -38,17 +42,20 @@ services:
   # Use Traefik as a reverse proxy to route traffic to the Cyclos application
   traefik:
     image: dhi.io/traefik:3
-    command:
-      - --api.dashboard=false
-      - --providers.file.filename=/etc/traefik/configuration.yml
-      - --entrypoints.web.address=:80
-      - --entrypoints.websecure.address=:443
-      - --entrypoints.web.http.redirections.entryPoint.to=websecure
-      - --entrypoints.web.http.redirections.entryPoint.scheme=https
-      - --entrypoints.web.http.redirections.entryPoint.permanent=true
-      - --certificatesresolvers.le.acme.tlschallenge=true
-      - --certificatesresolvers.le.acme.email=${LETS_ENCRYPT_EMAIL:-you@example.com}
-      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+    # String form (not a list) on purpose: when DOMAIN is empty, the
+    # ${DOMAIN:+...} expansions vanish entirely, disabling the HTTP -> HTTPS
+    # redirect and the Let's Encrypt resolver (see also configuration.yml).
+    command: >-
+      --api.dashboard=false
+      --providers.file.filename=/etc/traefik/configuration.yml
+      --entrypoints.web.address=:80
+      --entrypoints.websecure.address=:443
+      ${DOMAIN:+--entrypoints.web.http.redirections.entryPoint.to=websecure}
+      ${DOMAIN:+--entrypoints.web.http.redirections.entryPoint.scheme=https}
+      ${DOMAIN:+--entrypoints.web.http.redirections.entryPoint.permanent=true}
+      ${DOMAIN:+--certificatesresolvers.le.acme.tlschallenge=true}
+      ${DOMAIN:+--certificatesresolvers.le.acme.email=${LETS_ENCRYPT_EMAIL:-you@example.com}}
+      ${DOMAIN:+--certificatesresolvers.le.acme.storage=/acme/acme.json}
     depends_on:
       init:
         condition: service_completed_successfully
@@ -56,17 +63,17 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      DOMAIN: ${DOMAIN:-example.com}
+      DOMAIN: ${DOMAIN:-}
     volumes:
       - ./traefik/acme.json:/acme/acme.json
       - ./traefik/configuration.yml:/etc/traefik/configuration.yml:ro
     restart: unless-stopped
     networks:
-      - cyclos-net
+      - net
 
   # Cyclos application container
   cyclos:
-    image: cyclos/cyclos:${CYCLOS_VERSION}
+    image: docker.io/cyclos/cyclos:${CYCLOS_VERSION}
     environment:
       DB_HOST: db
       DB_NAME: cyclos
@@ -83,7 +90,7 @@ services:
       - ./cyclos/runtime-secrets:/run/runtime-secrets:ro
     restart: unless-stopped
     networks:
-      - cyclos-net
+      - net
     depends_on:
       init:
         condition: service_completed_successfully
@@ -92,7 +99,8 @@ services:
 
   # The PostgreSQL database
   db:
-    image: postgis/postgis:18-3.6-alpine
+    image: docker.io/postgis/postgis:18-3.6-alpine
+    # The official postigs image doesn't currently support arm64, but you can use this one instead: docker.io/imresamu/postgis:18-3.6-alpine
     environment:
       POSTGRES_DB: cyclos
       POSTGRES_USER: cyclos
@@ -105,8 +113,11 @@ services:
       test: 
         - "CMD-SHELL"
         - |
-          pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1;
-          if [ -n "$(ls -A /docker-entrypoint-initdb.d/ 2>/dev/null)" ]; then
+          # -h 127.0.0.1 forces a TCP probe: during the first-startup SQL import,
+          # the temporary init server only listens on the Unix socket, so a
+          # socket-based pg_isready would wrongly mark the db healthy too early.
+          pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1;
+          if [ -n "$$(find /docker-entrypoint-initdb.d/ -maxdepth 1 \( -name '*.sql' -o -name '*.sql.gz' \) 2>/dev/null)" ]; then
             psql -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'application';" | grep -q 1 || exit 1;
           fi
       interval: 5s
@@ -115,12 +126,12 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - cyclos-net
+      - net
     secrets:
       - db_password
 
 networks:
-  cyclos-net:
+  net:
     driver: bridge
 
 secrets:

@@ -1,23 +1,29 @@
-Small cluster example
-=====================
+Docker Swarm Cyclos deployment
+==============================
 
 This folder contains a minimal Docker Swarm example to run Cyclos (5+) in a production cluster.
 This works for a small cluster (2-5) nodes. For larger clusters, Kubernetes is better suited instead.
 It is assumed that the load balancer and database will be provided externally.
 
-**Load balancer**
+## Load balancer
 
 Most cloud providers offer managed load balancers. To work with this setup, the load balancer:
 
-* Must support the HTTP/2 protocol. With HTTP/1 the Cyclos frontend will be quite slow;
-* Must handle TLS (HTTPS connection);
+* **Must support HTTP/2 on the public-facing listener:** Cyclos frontend relies on HTTP/2 multiplexing
+for fast asset and API loading. Without HTTP/2 on the public entry point, the frontend will be noticeably slow.
+* **Can use HTTP/1.1 for backend dispatches:** For forwarding requests from the load balancer to Cyclos
+container tasks (port 8080), standard HTTP/1.1 is fully supported and recommended.
+* Must handle TLS termination (HTTPS connection);
 * Must add the common proxy headers: `X-Forwarded-For` and `X-Forwarded-Proto`;
 * Must know each of the docker swarm nodes, and distribute load among them.
-  There is no need for Sticky sessions or similar 'smart' routing.
+  There is no need for sticky sessions or similar 'smart' routing.
+* **Network isolation:** For security, the Swarm worker nodes should reside in a private subnet,
+with firewall /security group rules configured so port 8080 is only accessible by the load balancer,
+never directly from the public internet.
 
-**Database**
+## Database
 
-The PostgreSQL database, it must be accessible by hostname with a user and password.
+The PostgreSQL database must be accessible by hostname with a user and password.
 A cloud-provider managed PostgreSQL server is recommended.
 
 If you will use a database cluster with a hot standby server (whose replication MUST be
@@ -29,7 +35,46 @@ this is just a matter of adding to `docker-compose.yaml`:
 https://documentation.cyclos.org/dev/cyclos-reference/#setup-scalability-db-read-standby
 for more details.
 
-**Performance tuning**
+## Security and Zero Trust Architecture (ZTA)
+
+Adopting Zero Trust Architecture (ZTA) principles "never trust, always verify; assume the network is hostile"
+is always recommended in production environments. However, the exact implementation level depends on your
+specific project, regulatory and compliance mandates (e.g. PCI-DSS, SOC 2), hosting platform,
+and your team's operational expertise.
+
+The configuration provided in this folder serves as a practical, provider-agnostic starting point:
+
+### Inter-Node Encryption (East-West):
+The Swarm overlay network `cyclos-net` is configured with `driver_opts: { encrypted: "true" }`.
+Docker automatically negotiates IPsec tunnels (ESP) between all Swarm nodes, encrypting inter-replica
+and cluster communication at the kernel level with zero changes required in Tomcat or Java.
+
+### Database Transport Encryption:
+Because Cyclos uses HikariCP with the PostgreSQL JDBC driver, database TLS can be enforced by adding system
+properties to `JAVA_OPTS` in `docker-compose.yaml`:
+
+```yaml
+-Dcyclos.datasource.dataSource.ssl=true
+-Dcyclos.datasource.dataSource.sslmode=verify-full
+-Dcyclos.datasource.dataSource.sslrootcert=/run/secrets/db_ca_cert
+```
+
+The database root CA can be safely mounted as a Docker Swarm secret (`/run/secrets/db_ca_cert`).
+
+### Ingress Protection & Network Segmentation (North-South):
+Cyclos services should never be exposed directly to the public internet. The public load balancer terminates HTTPS,
+provides HTTP/2, and dispatches HTTP/1.1 requests to Cyclos on port 8080. Restrict ingress via your cloud
+provider's firewall / security groups so that only the load balancer can reach port 8080 on your Swarm nodes.
+*Note:* If your compliance policies require end-to-end mutual TLS (mTLS) all the way to the container, or if you use
+edge CDNs like Cloudflare Authenticated Origin Pulls, you can place a lightweight ingress proxy like Traefik or Envoy
+in the Swarm to validate client certificates.
+
+### Secrets Management:
+Sensitive credentials such as `db_password` (and optional TLS certificates or keys) are managed through native
+Docker Swarm secrets, mounted into `/run/secrets/` in container memory rather than stored in environment
+variables or configuration files.
+
+## Performance tuning
 
 Scaling from a single host deployment to a clustered deployment will likely require attention
 on more points. See https://documentation.cyclos.org/dev/cyclos-reference/#setup-scalability
@@ -37,7 +82,7 @@ for reference. One of the mentioned points there is using the hot standby databa
 as mentioned above, but there are other points, such as deploying an OpenSearch server to
 handle searches faster.
 
-**Logging**
+## Logging
 
 As Cyclos instances (replicas) will be scattered in the cluster, it also makes less sense for
 storing Cyclos logs in files. For this reason, the logging is by default configured in
@@ -46,7 +91,7 @@ Docker, and the `docker service logs -f cyclos_cyclos` will show an aggregated v
 all instances. If you prefer to store logs in the database instead, configure as
 https://documentation.cyclos.org/dev/cyclos-reference/#setup-adjustments-logging.
 
-**Creating the Docker swarm cluster**
+## Creating the Docker swarm cluster
 
 The minimum Docker Engine version is 20.10.0, however the latest LTS version is recommended.
 It already includes Swarm natively.
@@ -74,19 +119,19 @@ iuytsaghd34kjnasapo1341sq     cyclos3       Ready     Active                    
 t9g39g9q5bdc3ub3qcw8hs32j *   cyclos1       Ready     Active         Leader           29.2.1
 ```
 
-Then, copy this project, especially the `small-cluster` folder to your Leader node. Here is an example
+Then, copy this project, especially the `docker-swarm` folder to your Leader node. Here is an example
 for locally creating a tarball file and sending it via SSH:
 
 ```bash
 cd <path/to>/cyclos-docker
 
 # Compress and send the file
-tar cvzf small-cluster.tar.gz small-cluster
-scp -i <your-key-file> small-cluster.tar.gz <user>@<public-leader-node-ip>:
+tar cvzf docker-swarm.tar.gz docker-swarm
+scp -i <your-key-file> docker-swarm.tar.gz <user>@<public-leader-node-ip>:
 
 # Connect to the server and extract the file
 ssh -i <your-key-file> <user>@<public-leader-node-ip>
-tar xvzf small-cluster.tar.gz
+tar xvzf docker-swarm.tar.gz
 ```
 
 Then you will be ready to start deploying your stack. A little bit of Docker swarm terminology:
@@ -103,11 +148,12 @@ Then you will be ready to start deploying your stack. A little bit of Docker swa
   be plainly stored in configuration files. Docker can create a secret from a one-time input, store
   it securely, then mount it in files under running tasks.
 
-**Running the cluster**
+## Running the cluster
 
-Once in the Leader node, make sure you are in the `small-cluster` folder. Then:
+Once in the Leader node, make sure you are in the `docker-swarm` folder. Then:
 
-1. Copy example env and edit it to your settings:
+### 1. Copy example env and edit it to your settings:
+
 ```bash
 cp .env.example .env
 # Edit the .env file, for example: nano .env
@@ -115,7 +161,7 @@ cp .env.example .env
 
 Make sure you set `REPLICAS` to be the number of nodes in your cluster.
 
-2. Create secrets:
+### 2. Create secrets:
 
 At least the `db_password` secret is required. If you configure additional services, such as
 storing files in an external provider, using OpenSearch, etc, you should handle the respective
@@ -135,7 +181,7 @@ echo "your-db-password" | docker secret create db_password -
 set -o history # Re-enable bash history
 ```
 
-3. Deploy the stack:
+### 3. Deploy the stack:
 
 Distinct from `docker compose`, `docker stack` doesn't automatically processes the `.env` file.
 For this reason, a script is provided to apply the `.env` file and start the cluster:
@@ -147,7 +193,7 @@ For this reason, a script is provided to apply the `.env` file and start the clu
 Note that this script calls the stack `cyclos`. As the service in `docker-compose.yaml` is
 also defined as `cyclos`, the task name will be `cyclos_cyclos`.
 
-4. Review the logs:
+### 4. Review the logs:
 
 ```bash
 docker service logs -f cyclos_cyclos
@@ -155,7 +201,7 @@ docker service logs -f cyclos_cyclos
 
 The `-f` flag will lock the console and stream updates to logs. Press `Ctrl+C` to exit.
 
-**Dynamically rescaling**
+## Dynamically rescaling
 
 If you need to add or remove cluster nodes, you can rescale the service without needing
 to stop any node. Just run:
@@ -164,7 +210,7 @@ to stop any node. Just run:
 docker service scale cyclos_cyclos=4
 ```
 
-**Upgrading Cyclos**
+## Upgrading Cyclos
 
 When running in a cluster, Cyclos DO NOT support upgrading a node while others are in the old version,
 because the database schema changes between versions, and that would cause errors in running instances.
@@ -173,11 +219,11 @@ So it is always required to remove the entire stack, update the version and star
 To upgrade between major versions, always carefully inspect the release notes in https://license.cyclos.org.
 Also, before upgrading, it is always recommended to backup your database.
 
-To upgrade, SSH into your Leader node, go to the `small-cluster` directory and edit your `.env` file with the
+To upgrade, SSH into your Leader node, go to the `docker-swarm` directory and edit your `.env` file with the
 new `CYCLOS_VERSION`. Note that minor and patch versions are published in the same tag, so, if you are set it to
 `5`, it will also updated for `5.0.1`, `5.0.2`, etc, as well as `5.1.0`, `5.1.1`, etc.
 
-Then, run the following in the Leader node, in the `small-cluster` directory:
+Then, run the following in the Leader node, in the `docker-swarm` directory:
 
 ```bash
 ./upgrade.sh

@@ -1,12 +1,18 @@
+# DOMAIN is passed through from docker-compose.yaml. When it is empty, the
+# router falls back to a plain-HTTP catch-all on the web entrypoint and no
+# Let's Encrypt certificate is requested. Traefik renders Go templates in
+# dynamic configuration files (https://doc.traefik.io/traefik/providers/file/).
 http:
   routers:
     cyclos-router:
-      rule: 'Host(`{{ env "DOMAIN" }}`)'
+      rule: '{{ if env "DOMAIN" }}Host(`{{ env "DOMAIN" }}`){{ else }}PathPrefix(`/`){{ end }}'
       entryPoints:
-        - websecure
+        - '{{ if env "DOMAIN" }}websecure{{ else }}web{{ end }}'
       service: cyclos-svc
+      {{ if env "DOMAIN" }}
       tls:
         certResolver: le
+      {{ end }}
 
   services:
     cyclos-svc:

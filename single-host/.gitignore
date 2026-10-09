@@ -1,1 +1,8 @@
 .env
+cyclos/logs/*
+cyclos/tomcat-logs/*
+cyclos/runtime-secrets/*
+db/data/*
+db/init/*.sql
+secrets/*
+traefik/acme.json

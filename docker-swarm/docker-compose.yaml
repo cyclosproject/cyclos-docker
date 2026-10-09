@@ -1,6 +1,8 @@
+name: cyclos
+
 services:
   cyclos:
-    image: cyclos/cyclos:${CYCLOS_VERSION}
+    image: docker.io/cyclos/cyclos:${CYCLOS_VERSION}
     environment:
       DB_HOST: ${DB_HOST}
       DB_NAME: ${DB_NAME:-cyclos}
@@ -13,6 +15,10 @@ services:
         -Dcyclos.header.protocol=X-Forwarded-Proto
         -Dcyclos.header.remoteAddress.index=-1
         -Dcyclos.log=console
+        # Database TLS options (Zero Trust starting point - uncomment if enforcing encrypted DB traffic):
+        # -Dcyclos.datasource.dataSource.ssl=true
+        # -Dcyclos.datasource.dataSource.sslmode=verify-full
+        # -Dcyclos.datasource.dataSource.sslrootcert=/run/secrets/db_ca_cert
     deploy:
       mode: replicated
       replicas: ${REPLICAS:-1}
@@ -23,17 +29,25 @@ services:
       - target: 8080
         published: 8080
         protocol: tcp
-        mode: host # External LoadBalancer needs to distribute traffic to all nodes
+        mode: host # External LoadBalancer distributes traffic here; restrict host access via firewall/security groups
     networks:
       cyclos-net:
     secrets:
       - db_password
+      # Optional: Database CA certificate for SSL verification (uncomment if used)
+      # - db_ca_cert
 
 networks:
   cyclos-net:
     driver: overlay
+    # Encrypt inter-node container traffic using IPsec (Zero Trust best practice)
+    driver_opts:
+      encrypted: "true"
 
 secrets:
   # Assumes the secret `db_password` is created in the Swarm (external)
   db_password:
     external: true
+  # Optional: Database CA certificate for SSL verification
+  # db_ca_cert:
+  #   external: true
